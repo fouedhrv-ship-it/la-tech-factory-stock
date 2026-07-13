@@ -3,7 +3,12 @@
 La Tech Factory - surveillance publique du stock et des fiches produits.
 
 Ce script :
-1. Lit le sitemap public du site (aucun acces back-office, aucun identifiant).
+1. Crawle le site public page par page, en partant de la page d'accueil et en
+   suivant tous les liens internes (categories, sous-categories, marques,
+   fabricants...), SANS se baser sur le sitemap.xml. Chaque page produit est
+   reperee via la structure propre a ses cartes produit (lien avec la classe
+   "cursor-pointer"), ce qui permet de lister la totalite des produits reels
+   du site, sans doublon.
 2. Pour chaque page produit, detecte :
    - si le texte "rupture de stock" est present (produit epuise) ;
    - le nombre de photos reelles du produit (via les attributs alt des balises
@@ -25,6 +30,7 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
+from urllib.parse import urljoin
 
 import requests
 import gspread
@@ -37,29 +43,75 @@ PHOTOS_SHEET = "Moins de 4 photos"
 PHOTO_THRESHOLD = 4
 MAX_WORKERS = 10
 REQUEST_TIMEOUT = 20
+MAX_CRAWL_PAGES = 800  # garde-fou pour eviter un crawl infini
 
 H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.S)
 TAG_RE = re.compile(r"<[^>]+>")
 ALT_RE = re.compile(r'alt="([^"]*)"')
-LOC_RE = re.compile(r"<loc>(.*?)</loc>")
+HREF_RE = re.compile(r'href="([^"]+)"')
+PRODUCT_LINK_RE = re.compile(r'<a class="cursor-pointer[^"]*"\s+href="([^"]+)"')
+
+EXCLUDED_PREFIXES = ("/_next", "/assets", "/favicon", "/api")
 
 
 def clean(text: str) -> str:
     return unescape(TAG_RE.sub("", text)).strip()
 
 
-def get_product_urls() -> list[str]:
-    resp = requests.get(f"{SITE}/sitemap.xml", timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    sub_sitemaps = sorted(set(LOC_RE.findall(resp.text)))
-    product_sitemaps = [u for u in sub_sitemaps if "/sitemaps/products/" in u]
-
-    urls: set[str] = set()
-    for sm_url in product_sitemaps:
-        r = requests.get(sm_url, timeout=REQUEST_TIMEOUT)
+def _fetch(url: str) -> str | None:
+    try:
+        r = requests.get(url, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
-        urls.update(LOC_RE.findall(r.text))
-    return sorted(urls)
+        return r.text
+    except requests.RequestException:
+        return None
+
+
+def discover_product_urls() -> list[str]:
+    """Crawle le site page par page (accueil, categories, sous-categories,
+    marques, fabricants...) sans utiliser le sitemap, et retourne la liste
+    dedupliquee de toutes les URLs de pages produit trouvees."""
+    visited: set[str] = set()
+    product_urls: set[str] = set()
+    frontier = [SITE + "/"]
+
+    while frontier and len(visited) < MAX_CRAWL_PAGES:
+        batch = [u for u in frontier if u not in visited][:MAX_WORKERS]
+        if not batch:
+            break
+        frontier = [u for u in frontier if u not in batch]
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            html_by_url = dict(zip(batch, pool.map(_fetch, batch)))
+
+        next_links: set[str] = set()
+        for url, html in html_by_url.items():
+            visited.add(url)
+            if not html:
+                continue
+
+            page_products = {urljoin(SITE, m.group(1)) for m in PRODUCT_LINK_RE.finditer(html)}
+            product_urls.update(page_products)
+
+            for m in HREF_RE.finditer(html):
+                href = m.group(1)
+                if href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                    continue
+                if href.startswith("http") and not href.startswith(SITE):
+                    continue  # lien externe
+                if any(href.startswith(p) for p in EXCLUDED_PREFIXES):
+                    continue
+                full = urljoin(SITE, href.split("?")[0].split("#")[0])
+                if not full.startswith(SITE):
+                    continue
+                if full in page_products:
+                    continue  # deja identifie comme produit, pas besoin de le re-crawler comme page de liste
+                if full not in visited:
+                    next_links.add(full)
+
+        frontier.extend(sorted(next_links - visited))
+
+    return sorted(product_urls)
 
 
 def analyze_product(url: str) -> dict:
@@ -88,7 +140,8 @@ def analyze_product(url: str) -> dict:
 
 
 def crawl() -> list[dict]:
-    urls = get_product_urls()
+    urls = discover_product_urls()
+    print(f"Pages produit decouvertes par le crawl : {len(urls)}")
     results = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = {pool.submit(analyze_product, u): u for u in urls}
