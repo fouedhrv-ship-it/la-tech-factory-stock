@@ -9,7 +9,7 @@ Ce script :
    - le nombre de photos reelles du produit (via les attributs alt des balises
      <img>, en excluant les vignettes de variantes de couleur).
 3. Met a jour un Google Sheet a deux onglets :
-   - "Feuille 1"          -> produits en rupture de stock
+   - "Rupture de stock"   -> produits en rupture de stock
    - "Moins de 4 photos"  -> produits avec 0 a 3 photos
 
 Authentification Google : compte de service (voir README.md), lu depuis la
@@ -32,7 +32,7 @@ from google.oauth2.service_account import Credentials
 
 SITE = "https://la-tech-factory.com"
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1v32NNkVbxbqT7H66Cc0S95UPIDzfZ2MDqI5GbqSinEY")
-STOCK_SHEET = "Feuille 1"
+STOCK_SHEET = "Rupture de stock"
 PHOTOS_SHEET = "Moins de 4 photos"
 PHOTO_THRESHOLD = 4
 MAX_WORKERS = 10
