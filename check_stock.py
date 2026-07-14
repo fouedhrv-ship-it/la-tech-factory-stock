@@ -9,18 +9,18 @@ Ce script :
    reperee via la structure propre a ses cartes produit (lien avec la classe
    "cursor-pointer"), ce qui permet de lister la totalite des produits reels
    du site, sans doublon.
-2. Pour chaque page produit, detecte :
-   - si le texte "rupture de stock" est present (produit epuise) ;
-   - le nombre de photos reelles du produit (via les attributs alt des balises
+2. Pour chaque page produit, détecte :
+   - si le texte "rupture de stock" est présent (produit épuisé) ;
+   - le nombre de photos réelles du produit (via les attributs alt des balises
      <img>, en excluant les vignettes de variantes de couleur).
-3. Met a jour un Google Sheet a deux onglets :
+3. Met à jour un Google Sheet à deux onglets :
    - "Rupture de stock"   -> produits en rupture de stock
-   - "Moins de 4 photos"  -> produits avec 0 a 3 photos
+   - "Moins de 4 photos"  -> produits avec 0 à 3 photos
 
 Authentification Google : compte de service (voir README.md), lu depuis la
-variable d'environnement GCP_SA_KEY (contenu JSON complet de la cle).
+variable d'environnement GCP_SA_KEY (contenu JSON complet de la clé).
 
-Aucune information de connexion au site la-tech-factory.com n'est utilisee :
+Aucune information de connexion au site la-tech-factory.com n'est utilisée :
 uniquement des pages publiques, en lecture seule.
 """
 
@@ -43,7 +43,10 @@ PHOTOS_SHEET = "Moins de 4 photos"
 PHOTO_THRESHOLD = 4
 MAX_WORKERS = 10
 REQUEST_TIMEOUT = 20
-MAX_CRAWL_PAGES = 800  # garde-fou pour eviter un crawl infini
+MAX_CRAWL_PAGES = 50000  # garde-fou anti-boucle infinie uniquement : le crawl est
+# volontairement complet et refait de zéro chaque matin (pas d'incrémental), pour
+# ne jamais rater les ~15 nouveaux produits ajoutés chaque jour sur le site. Cette
+# limite est très large pour ne jamais être atteinte en pratique.
 
 H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.S)
 TAG_RE = re.compile(r"<[^>]+>")
@@ -68,9 +71,9 @@ def _fetch(url: str) -> str | None:
 
 
 def discover_product_urls() -> list[str]:
-    """Crawle le site page par page (accueil, categories, sous-categories,
+    """Crawle le site page par page (accueil, catégories, sous-catégories,
     marques, fabricants...) sans utiliser le sitemap, et retourne la liste
-    dedupliquee de toutes les URLs de pages produit trouvees."""
+    dédupliquée de toutes les URLs de pages produit trouvées."""
     visited: set[str] = set()
     product_urls: set[str] = set()
     frontier = [SITE + "/"]
@@ -105,7 +108,7 @@ def discover_product_urls() -> list[str]:
                 if not full.startswith(SITE):
                     continue
                 if full in page_products:
-                    continue  # deja identifie comme produit, pas besoin de le re-crawler comme page de liste
+                    continue  # déjà identifié comme produit, pas besoin de le re-crawler comme page de liste
                 if full not in visited:
                     next_links.add(full)
 
@@ -141,7 +144,7 @@ def analyze_product(url: str) -> dict:
 
 def crawl() -> list[dict]:
     urls = discover_product_urls()
-    print(f"Pages produit decouvertes par le crawl : {len(urls)}")
+    print(f"Pages produit découvertes par le crawl : {len(urls)}")
     results = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = {pool.submit(analyze_product, u): u for u in urls}
@@ -196,7 +199,7 @@ def main() -> int:
     photos_ws = get_worksheet(gc, PHOTOS_SHEET)
     replace_data_rows(photos_ws, low_photo_rows)
 
-    print(f"Produits analyses : {len(valid)} (erreurs : {len(errors)})")
+    print(f"Produits analysés : {len(valid)} (erreurs : {len(errors)})")
     print(f"Rupture de stock  : {len(out_of_stock_rows)}")
     print(f"Moins de {PHOTO_THRESHOLD} photos : {len(low_photo_rows)}")
     if errors:
